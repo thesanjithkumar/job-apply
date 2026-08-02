@@ -1,0 +1,111 @@
+name: Daily Job Apply
+
+on:
+  schedule:
+    - cron: '30 3 * * *'   # 9:00 AM IST (UTC+5:30) = 3:30 AM UTC
+  workflow_dispatch:         # manual trigger from GitHub Actions tab
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+
+    # Defined at job level so every step inherits them
+    env:
+      # ── AI providers ────────────────────────────────────────────────────
+      # Add whichever keys you have as GitHub Secrets. At least one required.
+      GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
+      CEREBRAS_API_KEY:    ${{ secrets.CEREBRAS_API_KEY }}
+      OPENROUTER_API_KEY:  ${{ secrets.OPENROUTER_API_KEY }}
+      GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+      MISTRAL_API_KEY:     ${{ secrets.MISTRAL_API_KEY }}
+      SAMBANOVA_API_KEY:   ${{ secrets.SAMBANOVA_API_KEY }}
+      NVIDIA_API_KEY:      ${{ secrets.NVIDIA_API_KEY }}
+      KILO_API_KEY:        ${{ secrets.KILO_API_KEY }}
+      SCALEWAY_API_KEY:    ${{ secrets.SCALEWAY_API_KEY }}
+      HYPERBOLIC_API_KEY:  ${{ secrets.HYPERBOLIC_API_KEY }}
+      NEBIUS_API_KEY:      ${{ secrets.NEBIUS_API_KEY }}
+      FIREWORKS_API_KEY:   ${{ secrets.FIREWORKS_API_KEY }}
+      NOVITA_API_KEY:      ${{ secrets.NOVITA_API_KEY }}
+      INFERENCE_API_KEY:   ${{ secrets.INFERENCE_API_KEY }}
+      LAMBDA_API_KEY:      ${{ secrets.LAMBDA_API_KEY }}
+      CHUTES_API_KEY:      ${{ secrets.CHUTES_API_KEY }}
+      OVH_API_KEY:         ${{ secrets.OVH_API_KEY }}
+      HF_TOKEN:            ${{ secrets.HF_TOKEN }}
+      UPSTAGE_API_KEY:     ${{ secrets.UPSTAGE_API_KEY }}
+      KLUSTER_API_KEY:     ${{ secrets.KLUSTER_API_KEY }}
+      # ── Your info ───────────────────────────────────────────────────────
+      USER_FIRST_NAME:     ${{ secrets.USER_FIRST_NAME }}
+      USER_LAST_NAME:      ${{ secrets.USER_LAST_NAME }}
+      USER_PHONE:          ${{ secrets.USER_PHONE }}
+      USER_LINKEDIN:       ${{ secrets.USER_LINKEDIN }}
+      # ── Email sending ───────────────────────────────────────────────────
+      EMAIL_FROM:          ${{ secrets.EMAIL_FROM }}
+      EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}
+      EMAIL_NAME:          ${{ secrets.EMAIL_NAME }}
+      SMTP_HOST:           ${{ secrets.SMTP_HOST }}
+      SMTP_PORT:           ${{ secrets.SMTP_PORT }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install Python deps
+        run: pip install -r requirements.txt
+
+      - name: Install Playwright + Chromium
+        run: playwright install chromium --with-deps
+
+      # Cache the browser profile between runs so login sessions persist.
+      # First run: browser opens without any saved login — sign in manually
+      # via workflow_dispatch, or accept that job-site apply steps may fail
+      # (they fail gracefully; ranking + email still work).
+      - name: Restore browser profile
+        uses: actions/cache/restore@v4
+        with:
+          path: browser_profile/
+          key: browser-profile-${{ github.run_number }}
+          restore-keys: browser-profile-
+
+      # Resume stored as a base64-encoded GitHub Secret (RESUME_B64).
+      # Encode locally: base64 -w 0 resume.pdf   (Linux/Mac)
+      #                 certutil -encode resume.pdf tmp.b64 && findstr /v CERTIFICATE tmp.b64 > encoded.txt  (Windows)
+      - name: Write resume from secret
+        env:
+          RESUME_B64: ${{ secrets.RESUME_B64 }}
+        run: |
+          if [ -n "$RESUME_B64" ]; then
+            mkdir -p resume
+            printf '%s' "$RESUME_B64" | base64 -d > resume/resume.pdf
+            echo "Resume written."
+          else
+            echo "Warning: RESUME_B64 secret not set — main.py will fail."
+          fi
+
+      - name: Scrape and rank jobs
+        run: python main.py
+
+      # xvfb-run provides a virtual display so headless=False works in CI.
+      # This is required for Cloudflare Turnstile (Mailmeteor) to solve itself.
+      - name: Apply to jobs and send cold emails
+        run: xvfb-run --server-args="-screen 0 1280x800x24" python apply.py
+
+      # Save updated browser profile (newer run_number = newest cache entry,
+      # which gets restored via restore-keys prefix on the next run).
+      - name: Save browser profile
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: browser_profile/
+          key: browser-profile-${{ github.run_number }}
+
+      - name: Upload results.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-${{ github.run_id }}
+          path: results.json
+          retention-days: 30

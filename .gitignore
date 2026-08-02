@@ -1,0 +1,13 @@
+.env
+results.json
+browser_profile/
+humanizer/
+__pycache__/
+*.pyc
+*.pyo
+
+# resume files are personal — store content in RESUME_B64 GitHub Secret instead
+resume/*.pdf
+resume/*.txt
+resume/*.md
+resume/*.docx

@@ -1,0 +1,6 @@
+python-jobspy
+openai
+pypdf
+python-dotenv
+playwright
+httpx

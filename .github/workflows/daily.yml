@@ -70,21 +70,6 @@ jobs:
           key: browser-profile-${{ github.run_number }}
           restore-keys: browser-profile-
 
-      # Resume stored as a base64-encoded GitHub Secret (RESUME_B64).
-      # Encode locally: base64 -w 0 resume.pdf   (Linux/Mac)
-      #                 certutil -encode resume.pdf tmp.b64 && findstr /v CERTIFICATE tmp.b64 > encoded.txt  (Windows)
-      - name: Write resume from secret
-        env:
-          RESUME_B64: ${{ secrets.RESUME_B64 }}
-        run: |
-          if [ -n "$RESUME_B64" ]; then
-            mkdir -p resume
-            printf '%s' "$RESUME_B64" | base64 -d > resume/resume.pdf
-            echo "Resume written."
-          else
-            echo "Warning: RESUME_B64 secret not set — main.py will fail."
-          fi
-
       - name: Scrape and rank jobs
         run: python main.py
 

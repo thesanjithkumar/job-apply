@@ -425,15 +425,26 @@ def _parse_rankings(raw: str, jobs: list[dict]) -> list[dict]:
     ]
 
 
+_PRIMARY_TERMS = ["ai engineer", "ai full stack", "full stack", "fullstack", "machine learning", "ml engineer"]
+_MAX_JOBS_TO_RANK = 50  # keeps prompt under ~10k tokens for free-tier providers
+
+
 def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
+    # Sort: primary-term matches first, then others; cap at MAX to stay within token limits
+    def _priority(j):
+        t = j.get("title", "").lower()
+        return 0 if any(p in t for p in _PRIMARY_TERMS) else 1
+
+    jobs_to_rank = sorted(jobs, key=_priority)[:_MAX_JOBS_TO_RANK]
+
     jobs_blob = "\n\n".join(
-        f"[{i+1}] {j['title']} @ {j['company']} ({j['location']})\n{j['description']}"
-        for i, j in enumerate(jobs)
+        f"[{i+1}] {j['title']} @ {j['company']} ({j['location']})\n{j['description'][:200]}"
+        for i, j in enumerate(jobs_to_rank)
     )
     prompt = (
         "You are a career advisor. Rank the top 20 best-matching jobs for this candidate.\n\n"
         f"RESUME:\n{resume}\n\n"
-        f"JOB LISTINGS ({len(jobs)} total):\n{jobs_blob}\n\n"
+        f"JOB LISTINGS ({len(jobs_to_rank)} total):\n{jobs_blob}\n\n"
         "Return ONLY a JSON array ranked best to worst (top 20 or fewer):\n"
         '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<one sentence>"},...]\n'
         "No other text."
@@ -452,7 +463,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
                 for chunk in stream.text_stream:
                     full_text += chunk
             print("  Ranked by Anthropic")
-            return _parse_rankings(full_text, jobs)
+            return _parse_rankings(full_text, jobs_to_rank)
         except Exception as e:
             print(f"  Anthropic failed: {e}")
 
@@ -475,7 +486,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             )
             raw = resp.choices[0].message.content.strip()
             print(f"  Ranked by {name}")
-            return _parse_rankings(raw, jobs)
+            return _parse_rankings(raw, jobs_to_rank)
         except _SKIP_ON as e:
             print(f"  {name}: exhausted/unauthorized — {e}")
         except openai.APIStatusError as e:

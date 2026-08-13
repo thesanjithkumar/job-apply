@@ -286,56 +286,78 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
             return False
         await asyncio.sleep(random.uniform(1.5, 3))
 
-        # Fill free-text textarea fields (cover letter, "why us?", etc.)
-        areas = page.locator("textarea")
-        for i in range(await areas.count()):
-            ta = areas.nth(i)
-            hint = " ".join(filter(None, [
-                await ta.get_attribute("placeholder") or "",
-                await ta.get_attribute("aria-label")  or "",
-                await ta.get_attribute("name")         or "",
-            ])).lower().strip() or "describe your fit for this role"
-            answer = humanize(
-                f"Write a 2-sentence professional answer for this job application field: '{hint}'.\n"
-                f"Resume excerpt: {resume_text[:1200]}\n"
-                f"Job: {job['title']} at {job['company']}."
-            )
-            await _human_type(page, ta, answer)
-            await asyncio.sleep(random.uniform(0.6, 1.5))
+        async def _fill_current_step():
+            # Fill textarea fields (cover letter, "why us?", additional questions)
+            areas = page.locator("textarea:visible")
+            for i in range(await areas.count()):
+                ta = areas.nth(i)
+                if await ta.input_value() != "":
+                    continue  # already filled
+                hint = " ".join(filter(None, [
+                    await ta.get_attribute("placeholder") or "",
+                    await ta.get_attribute("aria-label")  or "",
+                    await ta.get_attribute("name")         or "",
+                ])).lower().strip() or "describe your fit for this role"
+                answer = humanize(
+                    f"Write a 2-sentence professional answer for this job application field: '{hint}'.\n"
+                    f"Resume excerpt: {resume_text[:1200]}\n"
+                    f"Job: {job['title']} at {job['company']}."
+                )
+                await _human_type(page, ta, answer)
+                await asyncio.sleep(random.uniform(0.6, 1.5))
 
-        # Standard single-line fields
-        for sel, value in {
-            'input[autocomplete*="given-name"], input[name*="first_name"], input[id*="first"]':
-                user_info["first_name"],
-            'input[autocomplete*="family-name"], input[name*="last_name"], input[id*="last"]':
-                user_info["last_name"],
-            'input[type="email"]':
-                user_info["email"],
-            'input[type="tel"], input[name*="phone"], input[id*="phone"]':
-                user_info["phone"],
-            'input[name*="linkedin"], input[placeholder*="LinkedIn"], input[id*="linkedin"]':
-                user_info["linkedin"],
-        }.items():
-            if not value:
-                continue
-            try:
-                loc = page.locator(sel).first
-                if await loc.is_visible(timeout=1500):
-                    await _human_type(page, loc, value)
-                    await asyncio.sleep(random.uniform(0.3, 0.8))
-            except Exception:
-                pass
+            # Fill standard single-line fields
+            for sel, value in {
+                'input[autocomplete*="given-name"], input[name*="first_name"], input[id*="first"]':
+                    user_info["first_name"],
+                'input[autocomplete*="family-name"], input[name*="last_name"], input[id*="last"]':
+                    user_info["last_name"],
+                'input[type="email"]':
+                    user_info["email"],
+                'input[type="tel"], input[name*="phone"], input[id*="phone"]':
+                    user_info["phone"],
+                'input[name*="linkedin"], input[placeholder*="LinkedIn"], input[id*="linkedin"]':
+                    user_info["linkedin"],
+            }.items():
+                if not value:
+                    continue
+                try:
+                    loc = page.locator(sel).first
+                    if await loc.is_visible(timeout=1500) and await loc.input_value() == "":
+                        await _human_type(page, loc, value)
+                        await asyncio.sleep(random.uniform(0.3, 0.8))
+                except Exception:
+                    pass
 
-        submitted = await _click_first(page, [
-            'button[type="submit"]',
-            'button:has-text("Submit Application")',
-            'button:has-text("Submit")',
-            'input[type="submit"]',
-        ])
-        if submitted:
-            await asyncio.sleep(2)
-            print(f"  Applied: {job['title']} @ {job['company']}")
-            return True
+        # LinkedIn Easy Apply is multi-step: loop through Next → … → Submit
+        for step in range(10):
+            await _fill_current_step()
+            await asyncio.sleep(random.uniform(0.8, 1.5))
+
+            # Try submit first (last step)
+            submitted = await _click_first(page, [
+                'button:has-text("Submit application")',
+                'button:has-text("Submit Application")',
+                'button[aria-label*="Submit"]',
+                'button[type="submit"]:has-text("Submit")',
+                'input[type="submit"]',
+            ])
+            if submitted:
+                await asyncio.sleep(2)
+                print(f"  Applied: {job['title']} @ {job['company']}")
+                return True
+
+            # Advance to next step
+            advanced = await _click_first(page, [
+                'button:has-text("Next")',
+                'button:has-text("Review")',
+                'button:has-text("Continue")',
+                'button[aria-label*="Next"]',
+                'button[aria-label*="Review"]',
+            ])
+            if not advanced:
+                break
+            await asyncio.sleep(random.uniform(1.5, 2.5))
 
         print(f"  No submit button found: {job['title']}")
         return False
@@ -456,7 +478,7 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     msg["From"]    = f"{sender_name} <{sender}>"
     msg["To"]      = sender  # report goes to yourself
 
-    msg.attach(MIMEText(html, "html"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(

@@ -440,7 +440,7 @@ def _parse_rankings(raw: str, jobs: list[dict]) -> list[dict]:
 
 
 _PRIMARY_TERMS = ["ai engineer", "ai full stack", "full stack", "fullstack", "machine learning", "ml engineer"]
-_MAX_JOBS_TO_RANK = 50  # keeps prompt under ~10k tokens for free-tier providers
+_MAX_JOBS_TO_RANK = 100  # keeps prompt under ~10k tokens for free-tier providers
 
 
 def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
@@ -456,12 +456,12 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
         for i, j in enumerate(jobs_to_rank)
     )
     prompt = (
-        "You are a career advisor. Rank the top 20 best-matching jobs for this candidate.\n\n"
+        "You are a career advisor. Rank ALL jobs best to worst match for this candidate.\n\n"
         f"RESUME:\n{resume}\n\n"
         f"JOB LISTINGS ({len(jobs_to_rank)} total):\n{jobs_blob}\n\n"
-        "Return ONLY a JSON array ranked best to worst (top 20 or fewer):\n"
-        '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<max 10 words>"},...]\n'
-        "No other text. Reason must be under 10 words."
+        "Return ONLY a JSON array with ALL jobs ranked best to worst:\n"
+        '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<max 8 words>"},...]\n'
+        "No other text. Include every job. Reason must be under 8 words."
     )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -531,7 +531,7 @@ if __name__ == "__main__":
     ranked = rank_jobs(resume, jobs)
 
     bar = "=" * 60
-    print(f"\n{bar}\nTOP {len(ranked)} MATCHES FOR YOUR RESUME\n{bar}\n")
+    print(f"\n{bar}\nTOP {len(ranked)} RANKED JOBS FOR YOUR RESUME\n{bar}\n")
     for j in ranked:
         print(f"#{j['rank']}  [{j['score']}/100]  {j['title']} @ {j['company']}")
         print(f"     {j['location']}")

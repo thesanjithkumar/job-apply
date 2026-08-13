@@ -1,4 +1,4 @@
-import asyncio, json, os, random, re, smtplib, urllib.parse
+import asyncio, html as _html, json, os, random, re, smtplib, urllib.parse
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -287,12 +287,12 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
         await asyncio.sleep(random.uniform(1.5, 3))
 
         async def _fill_current_step():
-            # Fill textarea fields (cover letter, "why us?", additional questions)
+            # Textareas (cover letter, "why us?", additional questions)
             areas = page.locator("textarea:visible")
             for i in range(await areas.count()):
                 ta = areas.nth(i)
                 if await ta.input_value() != "":
-                    continue  # already filled
+                    continue
                 hint = " ".join(filter(None, [
                     await ta.get_attribute("placeholder") or "",
                     await ta.get_attribute("aria-label")  or "",
@@ -306,7 +306,7 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
                 await _human_type(page, ta, answer)
                 await asyncio.sleep(random.uniform(0.6, 1.5))
 
-            # Fill standard single-line fields
+            # Standard single-line text/tel/email inputs
             for sel, value in {
                 'input[autocomplete*="given-name"], input[name*="first_name"], input[id*="first"]':
                     user_info["first_name"],
@@ -326,6 +326,60 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
                     if await loc.is_visible(timeout=1500) and await loc.input_value() == "":
                         await _human_type(page, loc, value)
                         await asyncio.sleep(random.uniform(0.3, 0.8))
+                except Exception:
+                    pass
+
+            # Number inputs (years of experience, salary expectations, etc.)
+            num_inputs = page.locator('input[type="number"]:visible, input[type="text"][id*="year"]:visible')
+            for i in range(await num_inputs.count()):
+                ni = num_inputs.nth(i)
+                try:
+                    if await ni.is_visible(timeout=1000) and await ni.input_value() == "":
+                        label = (await ni.get_attribute("aria-label") or
+                                 await ni.get_attribute("placeholder") or "").lower()
+                        # Salary → 0 (prefer not to say), years → 3, default → 3
+                        value = "0" if "salary" in label or "ctc" in label or "compensation" in label else "3"
+                        await ni.fill(value)
+                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                except Exception:
+                    pass
+
+            # Select dropdowns — pick first non-placeholder option
+            selects = page.locator("select:visible")
+            for i in range(await selects.count()):
+                sel_el = selects.nth(i)
+                try:
+                    if not await sel_el.is_visible(timeout=1000):
+                        continue
+                    opts = sel_el.locator("option")
+                    count = await opts.count()
+                    for j in range(count):
+                        opt = opts.nth(j)
+                        val = await opt.get_attribute("value") or ""
+                        txt = (await opt.inner_text()).strip().lower()
+                        if val and val not in ("", "select", "choose") and txt not in ("select", "choose", "please select", "-- select --"):
+                            await sel_el.select_option(value=val)
+                            break
+                    await asyncio.sleep(random.uniform(0.2, 0.5))
+                except Exception:
+                    pass
+
+            # Radio buttons — pick first option in each group (usually "Yes" / first choice)
+            radio_groups: dict[str, object] = {}
+            radios = page.locator('input[type="radio"]:visible')
+            for i in range(await radios.count()):
+                r = radios.nth(i)
+                try:
+                    name = await r.get_attribute("name") or str(i)
+                    if name not in radio_groups:
+                        radio_groups[name] = r
+                except Exception:
+                    pass
+            for r in radio_groups.values():
+                try:
+                    if not await r.is_checked():
+                        await r.check()
+                        await asyncio.sleep(random.uniform(0.2, 0.5))
                 except Exception:
                     pass
 
@@ -393,12 +447,15 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     date_str = datetime.now().strftime("%B %d, %Y")
     total    = len(applied) + len(not_applied)
 
+    def _clean(s: str) -> str:
+        return _html.escape(str(s).replace("\xa0", " ").strip())
+
     def _job_card(j: dict, show_apply_btn: bool) -> str:
         score   = j.get("score", "—")
-        reason  = j.get("reason", "")
-        title   = j.get("title", "")
-        company = j.get("company", "")
-        loc     = j.get("location", "")
+        reason  = _clean(j.get("reason", ""))
+        title   = _clean(j.get("title", ""))
+        company = _clean(j.get("company", ""))
+        loc     = _clean(j.get("location", ""))
         url     = j.get("url", "#")
         rank    = j.get("rank", "—")
         btn = (

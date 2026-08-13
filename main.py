@@ -43,10 +43,26 @@ _SKIP_ON = (openai.RateLimitError, openai.AuthenticationError, openai.Permission
 
 # Greenhouse and Lever board slugs for India tech companies
 GREENHOUSE_BOARDS = [
+    # India tech companies
     "thoughtworks", "twilio", "truecaller", "payoneer",
     "circleslife", "productiv", "purestorage", "memryx",
+    # Global companies with India offices
+    "stripe", "coinbase", "hubspot", "zendesk",
+    "figma", "notion", "reddit", "squarespace",
+    "postman", "browserstack", "freshworks",
 ]
-LEVER_BOARDS = ["meesho", "fampay", "stable-money1"]
+LEVER_BOARDS = [
+    "meesho", "fampay", "stable-money1",
+    "razorpay", "swiggy",
+]
+
+# Workday ATS: (tenant, wd_version, board_name, display_name)
+# URL pattern: https://{tenant}.wd{n}.myworkdayjobs.com/wday/cxs/{tenant}/{board}/jobs
+# Only boards confirmed to accept unauthenticated POST requests are listed.
+WORKDAY_BOARDS = [
+    ("visa",   "5", "Visa",  "Visa"),
+    ("paypal", "1", "jobs",  "PayPal"),
+]
 
 # Role keywords for Greenhouse/Lever/API source filtering
 _TARGET_ROLES = [
@@ -293,6 +309,49 @@ def _scrape_jobviareferral(seen: set, jobs: list):
         print(f"  Warning: JobViaReferral failed: {e}")
 
 
+def _scrape_workday(seen: set, jobs: list):
+    """Workday ATS public job search API — Visa, Mastercard, PayPal, AmEx, Citi etc."""
+    print("  [Workday] Scraping career pages...")
+    headers = {**_HEADERS, "Content-Type": "application/json"}
+    for tenant, wd_ver, board, company in WORKDAY_BOARDS:
+        url = f"https://{tenant}.wd{wd_ver}.myworkdayjobs.com/wday/cxs/{tenant}/{board}/jobs"
+        base_url = f"https://{tenant}.wd{wd_ver}.myworkdayjobs.com"
+        found = 0
+        for term in SEARCH_TERMS:
+            try:
+                res = requests.post(
+                    url,
+                    json={"limit": 20, "offset": 0, "searchText": term, "appliedFacets": {}},
+                    headers=headers,
+                    timeout=15,
+                )
+                if res.status_code != 200:
+                    break  # wrong tenant/board — skip this company entirely
+                for posting in res.json().get("jobPostings", []):
+                    title = posting.get("title", "")
+                    location = posting.get("locationsText", "")
+                    if not _role_match(title) or not _india_loc(location):
+                        continue
+                    ext_path = posting.get("externalPath", "")
+                    job_url = f"{base_url}{ext_path}" if ext_path else base_url
+                    if not job_url or job_url in seen:
+                        continue
+                    seen.add(job_url)
+                    jobs.append({
+                        "title": title,
+                        "company": company,
+                        "location": location or "India",
+                        "url": job_url,
+                        "description": "",
+                        "source": "Workday",
+                    })
+                    found += 1
+            except Exception as e:
+                print(f"  Warning: Workday '{company}' / '{term}' failed: {e}")
+        if found:
+            print(f"    {company}: {found} matched")
+
+
 def _scrape_apna(seen: set, jobs: list):
     """Apna.co — jobs in Bengaluru and Hyderabad (paginated, up to 5 pages each)."""
     MAX_PAGES = 5
@@ -340,6 +399,7 @@ def scrape_all() -> list[dict]:
     _scrape_jobspy(seen, jobs)
     _scrape_greenhouse(seen, jobs)
     _scrape_lever(seen, jobs)
+    _scrape_workday(seen, jobs)
     _scrape_remoteok(seen, jobs)
     _scrape_arbeitnow(seen, jobs)
     _scrape_jobviareferral(seen, jobs)

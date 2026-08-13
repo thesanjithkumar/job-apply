@@ -38,6 +38,8 @@ jobs:
       USER_LAST_NAME:      ${{ secrets.USER_LAST_NAME }}
       USER_PHONE:          ${{ secrets.USER_PHONE }}
       USER_LINKEDIN:       ${{ secrets.USER_LINKEDIN }}
+      # ── LinkedIn session cookie (F12 → Application → Cookies → li_at) ──
+      LINKEDIN_LI_AT:      ${{ secrets.LINKEDIN_LI_AT }}
       # ── Email sending ───────────────────────────────────────────────────
       EMAIL_FROM:          ${{ secrets.EMAIL_FROM }}
       EMAIL_PASSWORD:      ${{ secrets.EMAIL_PASSWORD }}

@@ -11,7 +11,7 @@ from jobspy import scrape_jobs
 load_dotenv()
 
 SEARCH_TERMS = ["AI Engineer", "AI Full Stack Engineer", "Full Stack Engineer"]
-SITES = ["linkedin", "indeed", "glassdoor"]
+SITES = ["linkedin", "indeed", "google"]
 RESULTS_PER_SEARCH = 15
 LOCATIONS = ["Bengaluru, India", "Hyderabad, India", "Bangalore, India"]
 
@@ -391,6 +391,7 @@ def _scrape_apna(seen: set, jobs: list):
             except Exception as e:
                 print(f"  Warning: Apna.co page {page} for {city_slug} failed: {e}")
                 break
+
 
 
 def scrape_all() -> list[dict]:

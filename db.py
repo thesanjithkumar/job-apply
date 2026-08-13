@@ -78,6 +78,17 @@ def init_db():
                 )
             """
         },
+        {
+            "sql": """
+                CREATE TABLE IF NOT EXISTS seen_jobs (
+                    url      TEXT PRIMARY KEY,
+                    title    TEXT,
+                    company  TEXT,
+                    score    INTEGER,
+                    seen_at  TEXT
+                )
+            """
+        },
     ])
     if enabled():
         print("  [DB] Connected — tables ready")
@@ -133,7 +144,39 @@ def mark_applied(job: dict):
     }])
 
 
+def mark_seen(jobs: list[dict]):
+    """Record jobs that were included in the report email (emailed but not auto-applied)."""
+    if not jobs or not enabled():
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    stmts = [{
+        "sql": "INSERT OR IGNORE INTO seen_jobs (url, title, company, score, seen_at) VALUES (?, ?, ?, ?, ?)",
+        "args": [_val(j.get("url")), _val(j.get("title")), _val(j.get("company")), _val(j.get("score")), _val(now)],
+    } for j in jobs]
+    _run(stmts)
+    print(f"  [DB] Marked {len(jobs)} jobs as seen (will skip next run)")
+
+
 # ── Read ───────────────────────────────────────────────────────────────────
+
+def get_seen_urls() -> set[str]:
+    """Return URLs of all jobs already applied to OR emailed to the user."""
+    if not enabled():
+        return set()
+    results = _run([
+        {"sql": "SELECT url FROM applied_jobs"},
+        {"sql": "SELECT url FROM seen_jobs"},
+    ])
+    urls = set()
+    for res in results:
+        try:
+            rows = res["response"]["result"]["rows"]
+            urls |= {row[0]["value"] for row in rows if row}
+        except Exception:
+            pass
+    print(f"  [DB] {len(urls)} previously seen/applied jobs — will skip")
+    return urls
+
 
 def get_applied_urls() -> set[str]:
     """Return URLs of every job ever successfully applied to."""
@@ -143,7 +186,7 @@ def get_applied_urls() -> set[str]:
     try:
         rows = results[0]["response"]["result"]["rows"]
         urls = {row[0]["value"] for row in rows if row}
-        print(f"  [DB] {len(urls)} previously applied jobs — will skip duplicates")
+        print(f"  [DB] {len(urls)} previously applied jobs")
         return urls
     except Exception:
         return set()

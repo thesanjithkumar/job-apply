@@ -10,6 +10,8 @@ from jobspy import scrape_jobs
 
 load_dotenv()
 
+import db
+
 SEARCH_TERMS = ["AI Engineer", "AI Full Stack Engineer", "Full Stack Engineer"]
 SITES = ["linkedin", "indeed", "google"]
 RESULTS_PER_SEARCH = 15
@@ -527,8 +529,12 @@ if __name__ == "__main__":
         print("No jobs found. Check your internet connection and try again.")
         raise SystemExit(1)
 
+    db.init_db()
+
     print("→ Ranking with AI (trying providers in order)...")
     ranked = rank_jobs(resume, jobs)
+
+    db.save_scraped_jobs(ranked)
 
     bar = "=" * 60
     print(f"\n{bar}\nTOP {len(ranked)} RANKED JOBS FOR YOUR RESUME\n{bar}\n")

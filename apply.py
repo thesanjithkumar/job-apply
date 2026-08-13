@@ -196,7 +196,8 @@ def send_cold_email(to_email: str, recruiter_name: str, job: dict):
         f"Mention this link once, naturally: {job['url']}"
     )
 
-    msg = MIMEText(body, "plain", "utf-8")
+    body_safe = body.encode("ascii", "replace").decode("ascii")
+    msg = MIMEText(body_safe, "plain", "utf-8")
     msg["Subject"] = _hdr(f"Applied - {job['title']} @ {job['company']}")
     msg["From"] = _hdr(f"{sender_name} <{sender}>")
     msg["To"] = to_email
@@ -543,7 +544,9 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     msg["From"]    = _hdr(f"{sender_name} <{sender}>")
     msg["To"]      = sender  # report goes to yourself
 
-    msg.attach(MIMEText(html, "html", "utf-8"))
+    # Encode all non-ASCII as HTML entities so smtplib never sees non-ASCII bytes
+    html_safe = html.encode("ascii", "xmlcharrefreplace").decode("ascii")
+    msg.attach(MIMEText(html_safe, "html", "utf-8"))
 
     try:
         with smtplib.SMTP(

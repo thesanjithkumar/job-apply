@@ -416,8 +416,22 @@ def scrape_all() -> list[dict]:
 
 def _parse_rankings(raw: str, jobs: list[dict]) -> list[dict]:
     raw = raw.strip()
-    start, end = raw.index("["), raw.rindex("]") + 1
-    rankings = json.loads(raw[start:end])
+    try:
+        start, end = raw.index("["), raw.rindex("]") + 1
+    except ValueError:
+        return []
+    json_str = raw[start:end]
+    try:
+        rankings = json.loads(json_str)
+    except json.JSONDecodeError:
+        # Recover partial response: trim to last complete entry
+        last = json_str.rfind("},")
+        if last == -1:
+            return []
+        try:
+            rankings = json.loads(json_str[:last + 1] + "]")
+        except json.JSONDecodeError:
+            return []
     return [
         {**jobs[r["index"] - 1], "rank": r["rank"], "score": r["score"], "reason": r["reason"]}
         for r in rankings
@@ -446,8 +460,8 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
         f"RESUME:\n{resume}\n\n"
         f"JOB LISTINGS ({len(jobs_to_rank)} total):\n{jobs_blob}\n\n"
         "Return ONLY a JSON array ranked best to worst (top 20 or fewer):\n"
-        '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<one sentence>"},...]\n'
-        "No other text."
+        '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<max 10 words>"},...]\n'
+        "No other text. Reason must be under 10 words."
     )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
@@ -480,7 +494,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=2048,
+                max_tokens=4096,
                 temperature=0.1,
                 timeout=120,
             )

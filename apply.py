@@ -2,6 +2,8 @@ import asyncio, html as _html, json, os, random, re, smtplib, urllib.parse
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+import db
 from pathlib import Path
 
 import httpx
@@ -625,8 +627,16 @@ async def _run():
         applied_jobs     = []
         not_applied_jobs = []
 
-        eligible = [j for j in jobs[:100] if j.get("score", 0) >= 75]
-        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked)")
+        # Skip jobs already applied to in previous runs
+        db.init_db()
+        already_applied = db.get_applied_urls()
+
+        eligible = [
+            j for j in jobs[:100]
+            if j.get("score", 0) >= 75 and j.get("url") not in already_applied
+        ]
+        skipped = len([j for j in jobs[:100] if j.get("url") in already_applied])
+        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked, {skipped} already applied skipped)")
 
         for job in eligible:
             print(f"\n→ #{job['rank']} [{job['score']}/100]  {job['title']} @ {job['company']}")
@@ -643,6 +653,7 @@ async def _run():
 
             if success:
                 applied_jobs.append(job)
+                db.mark_applied(job)
                 if email_ready:
                     dom = _company_domain(job["company"], job["url"])
                     email, name = await find_recruiter(mm_browser, job, dom)
@@ -650,11 +661,11 @@ async def _run():
                         try:
                             send_cold_email(email, name, job)
                         except Exception as e:
-                            print(f"  Email send failed: {e}")
+                            print(f"  Cold email failed: {e}")
                     else:
                         print(f"  No recruiter email found for {dom}")
                 else:
-                    print("  Skipping email (EMAIL_FROM / EMAIL_PASSWORD not set)")
+                    print("  Skipping cold email (EMAIL_FROM / EMAIL_PASSWORD not set)")
             else:
                 not_applied_jobs.append(job)
 

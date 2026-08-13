@@ -1,7 +1,13 @@
 import asyncio, html as _html, json, os, random, re, smtplib, urllib.parse
 from datetime import datetime
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
+
+def _hdr(s: str) -> str:
+    """Sanitize a string for use in an email header — removes non-ASCII."""
+    return s.replace("\xa0", " ").replace("–", "-").replace("—", "-").encode("ascii", "replace").decode("ascii")
 
 import db
 from pathlib import Path
@@ -190,9 +196,9 @@ def send_cold_email(to_email: str, recruiter_name: str, job: dict):
         f"Mention this link once, naturally: {job['url']}"
     )
 
-    msg = MIMEText(body)
-    msg["Subject"] = f"Applied – {job['title']} @ {job['company']}"
-    msg["From"] = f"{sender_name} <{sender}>"
+    msg = MIMEText(body, "plain", "utf-8")
+    msg["Subject"] = _hdr(f"Applied - {job['title']} @ {job['company']}")
+    msg["From"] = _hdr(f"{sender_name} <{sender}>")
     msg["To"] = to_email
 
     with smtplib.SMTP(
@@ -533,8 +539,8 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     </body></html>"""
 
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"Job Apply Report – {len(applied)} applied, {len(not_applied)} pending – {date_str}"
-    msg["From"]    = f"{sender_name} <{sender}>"
+    msg["Subject"] = _hdr(f"Job Apply Report - {len(applied)} applied, {len(not_applied)} pending - {date_str}")
+    msg["From"]    = _hdr(f"{sender_name} <{sender}>")
     msg["To"]      = sender  # report goes to yourself
 
     msg.attach(MIMEText(html, "html", "utf-8"))
@@ -627,16 +633,16 @@ async def _run():
         applied_jobs     = []
         not_applied_jobs = []
 
-        # Skip jobs already applied to in previous runs
+        # Skip jobs already applied to or emailed in previous runs
         db.init_db()
-        already_applied = db.get_applied_urls()
+        already_seen = db.get_seen_urls()
 
         eligible = [
             j for j in jobs[:100]
-            if j.get("score", 0) >= 75 and j.get("url") not in already_applied
+            if j.get("score", 0) >= 75 and j.get("url") not in already_seen
         ]
-        skipped = len([j for j in jobs[:100] if j.get("url") in already_applied])
-        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked, {skipped} already applied skipped)")
+        skipped = len([j for j in jobs[:100] if j.get("url") in already_seen])
+        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked, {skipped} already seen skipped)")
 
         for job in eligible:
             print(f"\n→ #{job['rank']} [{job['score']}/100]  {job['title']} @ {job['company']}")
@@ -675,6 +681,7 @@ async def _run():
         await job_ctx.close()
 
     send_report_email(applied_jobs, not_applied_jobs)
+    db.mark_seen(not_applied_jobs)
 
 
 if __name__ == "__main__":

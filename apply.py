@@ -517,6 +517,24 @@ async def _run():
             "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});"
         )
 
+        # Inject LinkedIn session cookie if provided — avoids the login wall in CI.
+        # Get it from: linkedin.com → F12 → Application → Cookies → li_at (Value)
+        # Store as GitHub Secret: LINKEDIN_LI_AT
+        li_at = os.environ.get("LINKEDIN_LI_AT", "")
+        if li_at:
+            await job_ctx.add_cookies([{
+                "name":     "li_at",
+                "value":    li_at,
+                "domain":   ".linkedin.com",
+                "path":     "/",
+                "httpOnly": True,
+                "secure":   True,
+                "sameSite": "None",
+            }])
+            print("  LinkedIn cookie injected")
+        else:
+            print("  LINKEDIN_LI_AT not set — LinkedIn jobs will be skipped (add as GitHub Secret)")
+
         # Separate browser for Mailmeteor: fresh context per search resets
         # session cookies so each lookup is treated as a new visitor.
         mm_browser = await p.chromium.launch(
@@ -528,8 +546,17 @@ async def _run():
         applied_jobs     = []
         not_applied_jobs = []
 
-        for job in jobs[:100]:
+        eligible = [j for j in jobs[:100] if j.get("score", 0) >= 75]
+        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked)")
+
+        for job in eligible:
             print(f"\n→ #{job['rank']} [{job['score']}/100]  {job['title']} @ {job['company']}")
+
+            # LinkedIn requires login — skip if no cookie was injected
+            if "linkedin.com" in job.get("url", "") and not li_at:
+                print(f"  LinkedIn job — no cookie set, skipping (will appear in report email)")
+                not_applied_jobs.append(job)
+                continue
 
             page = await job_ctx.new_page()
             success = await apply_to_job(page, job, resume_text, user_info)

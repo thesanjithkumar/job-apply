@@ -1,6 +1,10 @@
 python-jobspy
+anthropic
 openai
 pypdf
 python-dotenv
 playwright
 httpx
+requests
+beautifulsoup4
+lxml

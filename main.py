@@ -14,7 +14,7 @@ load_dotenv()
 import db
 
 SEARCH_TERMS = ["AI Engineer", "AI Full Stack Engineer", "Full Stack Engineer"]
-SITES = ["linkedin", "indeed", "google"]
+SITES = ["linkedin", "indeed", "google"]  # naukri removed — blocks with CAPTCHA (406)
 RESULTS_PER_SEARCH = 15
 LOCATIONS = ["Bengaluru, India", "Hyderabad, India", "Bangalore, India"]
 
@@ -46,17 +46,20 @@ _SKIP_ON = (openai.RateLimitError, openai.AuthenticationError, openai.Permission
 
 # Greenhouse and Lever board slugs for India tech companies
 GREENHOUSE_BOARDS = [
-    # India tech companies
+    # India tech / global companies with India offices
     "thoughtworks", "twilio", "truecaller", "payoneer",
     "circleslife", "productiv", "purestorage", "memryx",
     # Global companies with India offices
     "stripe", "coinbase", "hubspot", "zendesk",
     "figma", "notion", "reddit", "squarespace",
     "postman", "browserstack", "freshworks",
+    # Verified working boards
+    "mongodb", "elastic", "databricks",
 ]
 LEVER_BOARDS = [
     "meesho", "fampay", "stable-money1",
     "razorpay", "swiggy",
+    "cred",  # verified working
 ]
 
 # Workday ATS: (tenant, wd_version, board_name, display_name)
@@ -401,6 +404,91 @@ def _scrape_apna(seen: set, jobs: list):
 
 
 
+def _scrape_himalayas(seen: set, jobs: list):
+    """Himalayas public API — the free /jobs/api endpoint ignores search terms
+    and returns promoted jobs only.  We paginate 10 pages (200 jobs) and filter
+    by role/location.  Playwright-based search (apply.py) adds targeted results."""
+    print("  [Himalayas] Scraping promoted feed (200 jobs)...")
+    for page in range(1, 11):
+        try:
+            res = requests.get(
+                "https://himalayas.app/jobs/api",
+                params={"limit": 20, "page": page},
+                headers=_HEADERS,
+                timeout=15,
+            )
+            if res.status_code != 200:
+                break
+            raw = res.json().get("jobs", [])
+            if not raw:
+                break
+            for j in raw:
+                title = j.get("title", "")
+                if not _role_match(title):
+                    continue
+                locs = j.get("locationRestrictions") or []
+                if locs and not any(
+                    _india_loc(l) or l.lower() in ("worldwide", "anywhere", "global", "remote")
+                    for l in locs
+                ):
+                    continue
+                job_url = j.get("applicationLink", "")
+                if not job_url or job_url in seen:
+                    continue
+                seen.add(job_url)
+                loc_str = ", ".join(locs) if locs else "Worldwide Remote"
+                jobs.append({
+                    "title": title,
+                    "company": j.get("companyName", ""),
+                    "location": loc_str,
+                    "url": job_url,
+                    "description": str(j.get("excerpt", "") or j.get("description", ""))[:600],
+                    "source": "Himalayas",
+                    "date_posted": j.get("pubDate", ""),
+                })
+        except Exception as e:
+            print(f"  Warning: Himalayas page {page} failed: {e}")
+            break
+
+
+def _scrape_remotive(seen: set, jobs: list):
+    """Remotive public API — remote-friendly tech jobs open to India."""
+    print("  [Remotive] Scraping...")
+    for term in SEARCH_TERMS:
+        try:
+            res = requests.get(
+                "https://remotive.com/api/remote-jobs",
+                params={"search": term, "limit": 20},
+                headers=_HEADERS,
+                timeout=15,
+            )
+            if res.status_code != 200:
+                continue
+            for j in res.json().get("jobs", []):
+                title = j.get("title", "")
+                if not _role_match(title):
+                    continue
+                loc = j.get("candidate_required_location", "") or "Worldwide"
+                # keep worldwide/remote and India-specific listings
+                if loc and loc.lower() not in ("worldwide", "anywhere", "") and not _india_loc(loc):
+                    continue
+                job_url = j.get("url", "")
+                if not job_url or job_url in seen:
+                    continue
+                seen.add(job_url)
+                jobs.append({
+                    "title": title,
+                    "company": j.get("company_name", ""),
+                    "location": loc,
+                    "url": job_url,
+                    "description": str(j.get("description", ""))[:600],
+                    "source": "Remotive",
+                    "date_posted": j.get("publication_date", ""),
+                })
+        except Exception as e:
+            print(f"  Warning: Remotive '{term}' failed: {e}")
+
+
 def scrape_all() -> list[dict]:
     seen, jobs = set(), []
 
@@ -412,6 +500,8 @@ def scrape_all() -> list[dict]:
     _scrape_arbeitnow(seen, jobs)
     _scrape_jobviareferral(seen, jobs)
     _scrape_apna(seen, jobs)
+    _scrape_himalayas(seen, jobs)
+    _scrape_remotive(seen, jobs)
 
     # Ensure every job has a description field
     for j in jobs:
@@ -495,7 +585,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             full_text = ""
             with client.messages.stream(
                 model="claude-opus-5",
-                max_tokens=2048,
+                max_tokens=8192,
                 messages=[{"role": "user", "content": prompt}],
             ) as stream:
                 for chunk in stream.text_stream:

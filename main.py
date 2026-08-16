@@ -1,4 +1,5 @@
 import os, json, re
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import anthropic
@@ -145,6 +146,7 @@ def _scrape_jobspy(seen: set, jobs: list):
                     "url": url,
                     "description": str(desc)[:600],
                     "source": "JobSpy",
+                    "date_posted": str(row.get("date_posted", "") or ""),
                 })
 
 
@@ -174,6 +176,7 @@ def _scrape_greenhouse(seen: set, jobs: list):
                     "url": job_url,
                     "description": str(desc)[:600],
                     "source": "Greenhouse",
+                    "date_posted": j.get("updated_at", ""),
                 })
         except Exception as e:
             print(f"  Warning: Greenhouse '{board}' failed: {e}")
@@ -198,6 +201,7 @@ def _scrape_lever(seen: set, jobs: list):
                     continue
                 seen.add(job_url)
                 desc = (j.get("descriptionPlain") or j.get("description") or "")
+                created_ms = j.get("createdAt")
                 jobs.append({
                     "title": title,
                     "company": board.capitalize(),
@@ -205,6 +209,7 @@ def _scrape_lever(seen: set, jobs: list):
                     "url": job_url,
                     "description": str(desc)[:600],
                     "source": "Lever",
+                    "date_posted": datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).isoformat() if created_ms else "",
                 })
         except Exception as e:
             print(f"  Warning: Lever '{board}' failed: {e}")
@@ -412,6 +417,23 @@ def scrape_all() -> list[dict]:
     for j in jobs:
         if "description" not in j:
             j["description"] = ""
+
+    # Drop jobs older than 2 weeks (skip if no date available)
+    cutoff = datetime.now(timezone.utc) - timedelta(weeks=2)
+    def _recent(job) -> bool:
+        dp = job.get("date_posted", "")
+        if not dp:
+            return True
+        try:
+            dt = datetime.fromisoformat(str(dp).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt >= cutoff
+        except Exception:
+            return True
+    before = len(jobs)
+    jobs = [j for j in jobs if _recent(j)]
+    print(f"  Dropped {before - len(jobs)} jobs older than 2 weeks ({len(jobs)} remaining)")
 
     return jobs
 

@@ -207,7 +207,7 @@ def send_cold_email(to_email: str, recruiter_name: str, job: dict):
         int(os.environ.get("SMTP_PORT", "587")),
     ) as s:
         s.starttls()
-        s.login(sender, os.environ["EMAIL_PASSWORD"])
+        s.login(sender, os.environ["EMAIL_PASSWORD"].replace("\xa0", "").replace(" ", "").strip())
         s.send_message(msg)
     print(f"  Cold email → {recruiter_name or to_email}")
 
@@ -447,7 +447,8 @@ def _company_domain(company: str, job_url: str) -> str:
 
 def send_report_email(applied: list[dict], not_applied: list[dict]):
     sender      = os.environ.get("EMAIL_FROM", "")
-    password    = os.environ.get("EMAIL_PASSWORD", "")
+    # Strip non-breaking spaces / whitespace — copied App Passwords often have \xa0
+    password    = os.environ.get("EMAIL_PASSWORD", "").replace("\xa0", "").replace(" ", "").strip()
     sender_name = os.environ.get("EMAIL_NAME", sender)
     if not sender or not password:
         print("  Skipping report email (EMAIL_FROM / EMAIL_PASSWORD not set)")

@@ -19,7 +19,7 @@ from playwright.async_api import async_playwright, Browser
 
 load_dotenv()
 
-from main import PROVIDERS, _SKIP_ON, load_resume
+from main import PROVIDERS, SEARCH_TERMS, _SKIP_ON, _role_match, _india_loc, load_resume
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -212,6 +212,85 @@ def send_cold_email(to_email: str, recruiter_name: str, job: dict):
     print(f"  Cold email → {recruiter_name or to_email}")
 
 
+# ── Himalayas Playwright scraper ───────────────────────────────────────────
+
+async def scrape_himalayas_playwright(ctx, seen: set) -> list[dict]:
+    """
+    Scrape Himalayas job search using a real browser (Playwright).
+    The public API ignores search terms; the website's frontend calls a real
+    search endpoint — we intercept that response to get accurate results.
+    Returns a list of job dicts ready to score and apply to.
+    """
+    import urllib.parse as _up
+    collected: list[dict] = []
+
+    async def _search_term(term: str):
+        page = await ctx.new_page()
+        caught: list[dict] = []
+        done = asyncio.Event()
+
+        async def on_response(resp):
+            # Himalayas frontend calls its own /jobs/api (or similar) with real search
+            if "himalayas.app" in resp.url and resp.status == 200:
+                try:
+                    data = await resp.json()
+                    raw = data.get("jobs", [])
+                    if raw:
+                        caught.extend(raw)
+                        done.set()
+                except Exception:
+                    pass
+
+        page.on("response", on_response)
+        url = f"https://himalayas.app/jobs?q={_up.quote(term)}"
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            # Wait for the API response to arrive (up to 15s)
+            try:
+                await asyncio.wait_for(done.wait(), timeout=15)
+            except asyncio.TimeoutError:
+                pass
+        except Exception as e:
+            print(f"  [Himalayas PW] '{term}' page error: {e}")
+        finally:
+            await page.close()
+
+        for j in caught:
+            title = j.get("title", "")
+            if not _role_match(title):
+                continue
+            locs = j.get("locationRestrictions") or []
+            if locs and not any(
+                _india_loc(l) or l.lower() in ("worldwide", "anywhere", "global", "remote")
+                for l in locs
+            ):
+                continue
+            job_url = j.get("applicationLink", "")
+            if not job_url or job_url in seen:
+                continue
+            seen.add(job_url)
+            loc_str = ", ".join(locs) if locs else "Worldwide Remote"
+            collected.append({
+                "title": title,
+                "company": j.get("companyName", ""),
+                "location": loc_str,
+                "url": job_url,
+                "description": str(j.get("excerpt", "") or "")[:600],
+                "source": "Himalayas",
+                "date_posted": j.get("pubDate", ""),
+                "score": 80,  # auto-qualify: targeted search already filtered by role
+                "reason": f"ML/AI role at {j.get('companyName', 'company')} matching your search",
+            })
+
+    print("  [Himalayas] Playwright search...")
+    for term in SEARCH_TERMS:
+        await _search_term(term)
+        await asyncio.sleep(random.uniform(2, 4))
+
+    print(f"  [Himalayas] Found {len(collected)} matching jobs")
+    return collected
+
+
 # ── Playwright helpers ─────────────────────────────────────────────────────
 
 async def _click_first(page, selectors: list[str]) -> bool:
@@ -283,6 +362,24 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
             job["recruiter_name"] = rec_name
         if rec_linkedin:
             job["recruiter_linkedin"] = rec_linkedin
+
+        # Himalayas job pages link out to the company ATS — follow that link first
+        if "himalayas.app" in job.get("url", ""):
+            followed = await _click_first(page, [
+                'a:has-text("Apply Now")',
+                'a:has-text("Apply for this job")',
+                'a:has-text("Apply for job")',
+                'a[href*="lever.co"]',
+                'a[href*="greenhouse.io"]',
+                'a[href*="workable.com"]',
+                'a[href*="ashbyhq.com"]',
+                'a[href*="jobs."]',
+                '[data-testid*="apply"] a',
+            ])
+            if not followed:
+                print(f"  No external apply link on Himalayas page: {job['title']}")
+                return False
+            await asyncio.sleep(random.uniform(2, 3))
 
         clicked = await _click_first(page, [
             'button:has-text("Easy Apply")',
@@ -432,7 +529,7 @@ async def apply_to_job(page, job: dict, resume_text: str, user_info: dict) -> bo
 
 # ── Domain helper ──────────────────────────────────────────────────────────
 
-_BOARDS = {"linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com", "monster.com"}
+_BOARDS = {"linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com", "monster.com", "himalayas.app"}
 
 
 def _company_domain(company: str, job_url: str) -> str:
@@ -596,7 +693,7 @@ async def _run():
         # LinkedIn/Indeed across runs. First run → log in manually, then re-run.
         job_ctx = await p.chromium.launch_persistent_context(
             user_data_dir=profile_dir,
-            headless=False,
+            headless=True,
             slow_mo=60,
             args=[
                 "--disable-blink-features=AutomationControlled",
@@ -632,7 +729,7 @@ async def _run():
         # Separate browser for Mailmeteor: fresh context per search resets
         # session cookies so each lookup is treated as a new visitor.
         mm_browser = await p.chromium.launch(
-            headless=False,
+            headless=True,
             args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
             slow_mo=30,
         )
@@ -643,6 +740,11 @@ async def _run():
         # Skip jobs already applied to or emailed in previous runs
         db.init_db()
         already_seen = db.get_seen_urls()
+
+        # Supplement scored jobs with Himalayas Playwright search results
+        seen_urls = {j.get("url") for j in jobs}
+        hw_jobs = await scrape_himalayas_playwright(job_ctx, seen_urls | already_seen)
+        jobs = jobs + hw_jobs
 
         eligible = [
             j for j in jobs[:100]

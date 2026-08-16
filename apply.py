@@ -1,4 +1,4 @@
-import asyncio, html as _html, json, os, random, re, smtplib, urllib.parse
+import asyncio, email.policy, html as _html, json, os, random, re, smtplib, traceback, urllib.parse
 from datetime import datetime
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
@@ -542,7 +542,7 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     msg = MIMEMultipart("alternative")
     msg["Subject"] = _hdr(f"Job Apply Report - {len(applied)} applied, {len(not_applied)} pending - {date_str}")
     msg["From"]    = _hdr(f"{sender_name} <{sender}>")
-    msg["To"]      = sender  # report goes to yourself
+    msg["To"]      = _hdr(sender)
 
     # Encode all non-ASCII as HTML entities so smtplib never sees non-ASCII bytes
     html_safe = html.encode("ascii", "xmlcharrefreplace").decode("ascii")
@@ -555,11 +555,14 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
         ) as s:
             s.starttls()
             s.login(sender, password)
-            s.send_message(msg)
+            # Use sendmail with explicit bytes to bypass compat32 encoding quirks
+            raw = msg.as_bytes(policy=email.policy.SMTP)
+            s.sendmail(sender, [sender], raw)
         print(f"\n  Report email sent → {sender}")
         print(f"  Applied: {len(applied)}  |  Needs manual apply: {len(not_applied)}")
     except Exception as e:
         print(f"  Report email failed: {e}")
+        traceback.print_exc()
 
 
 # ── Entry point ────────────────────────────────────────────────────────────

@@ -20,9 +20,9 @@ LOCATIONS = ["Bengaluru, India", "Hyderabad, India", "Bangalore, India"]
 
 # (name, base_url, api_key_env, model)
 PROVIDERS = [
-    ("Groq",        "https://api.groq.com/openai/v1",                           "GROQ_API_KEY",       "llama-3.3-70b-versatile"),
-    ("Cerebras",    "https://api.cerebras.ai/v1",                                "CEREBRAS_API_KEY",   "llama3.3-70b"),
-    ("OpenRouter",  "https://openrouter.ai/api/v1",                              "OPENROUTER_API_KEY", "meta-llama/llama-3.3-70b-instruct:free"),
+    ("Groq",        "https://api.groq.com/openai/v1",                           "GROQ_API_KEY",       "openai/gpt-oss-120b"),
+    ("Cerebras",    "https://api.cerebras.ai/v1",                                "CEREBRAS_API_KEY",   "gpt-oss-120b"),
+    ("OpenRouter",  "https://openrouter.ai/api/v1",                              "OPENROUTER_API_KEY", "openai/gpt-oss-20b:free"),
     ("Gemini",      "https://generativelanguage.googleapis.com/v1beta/openai/",  "GEMINI_API_KEY",     "gemini-2.5-flash-lite"),
     ("Mistral",     "https://api.mistral.ai/v1",                                 "MISTRAL_API_KEY",    "mistral-small-latest"),
     ("SambaNova",   "https://api.sambanova.ai/v1",                               "SAMBANOVA_API_KEY",  "Meta-Llama-3.3-70B-Instruct"),

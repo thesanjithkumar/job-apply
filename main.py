@@ -20,10 +20,10 @@ LOCATIONS = ["Bengaluru, India", "Hyderabad, India", "Bangalore, India"]
 
 # (name, base_url, api_key_env, model)
 PROVIDERS = [
-    ("Groq",        "https://api.groq.com/openai/v1",                           "GROQ_API_KEY",        "groq/compound-mini"),
-    ("Cerebras",    "https://api.cerebras.ai/v1",                                "CEREBRAS_API_KEY",   "gpt-oss-120b"),
-    ("OpenRouter",  "https://openrouter.ai/api/v1",                              "OPENROUTER_API_KEY", "openai/gpt-oss-20b:free"),
-    ("Gemini",      "https://generativelanguage.googleapis.com/v1beta/openai/",  "GEMINI_API_KEY",     "gemini-2.5-flash-lite"),
+    ("Groq",        "https://api.groq.com/openai/v1",                           "GROQ_API_KEY",        "llama-3.3-70b-versatile"),
+    ("Cerebras",    "https://api.cerebras.ai/v1",                                "CEREBRAS_API_KEY",   "llama3.3-70b"),
+    ("OpenRouter",  "https://openrouter.ai/api/v1",                              "OPENROUTER_API_KEY", "meta-llama/llama-3.3-70b-instruct:free"),
+    ("Gemini",      "https://generativelanguage.googleapis.com/v1beta/openai/",  "GEMINI_API_KEY",     "gemini-3.5-flash-lite"),
     ("Mistral",     "https://api.mistral.ai/v1",                                 "MISTRAL_API_KEY",    "mistral-small-latest"),
     ("SambaNova",   "https://api.sambanova.ai/v1",                               "SAMBANOVA_API_KEY",  "Meta-Llama-3.3-70B-Instruct"),
     ("NVIDIA NIM",  "https://integrate.api.nvidia.com/v1",                       "NVIDIA_API_KEY",     "meta/llama-3.3-70b-instruct"),
@@ -554,7 +554,7 @@ def _parse_rankings(raw: str, jobs: list[dict]) -> list[dict]:
 
 
 _PRIMARY_TERMS = ["ai engineer", "ai full stack", "full stack", "fullstack", "machine learning", "ml engineer"]
-_MAX_JOBS_TO_RANK = 100  # keeps prompt under ~10k tokens for free-tier providers
+_MAX_JOBS_TO_RANK = 60   # keeps prompt under ~6k tokens for free-tier providers
 
 
 def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
@@ -612,14 +612,26 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
                 temperature=0.1,
                 timeout=120,
             )
-            raw = resp.choices[0].message.content.strip()
+            if not resp.choices:
+                print(f"  {name}: empty choices in response, skipping")
+                continue
+            msg = resp.choices[0].message
+            # Some reasoning models (e.g. deepseek-r1) put the answer in
+            # reasoning_content when content is None.
+            raw = (getattr(msg, "content", None)
+                   or getattr(msg, "reasoning_content", None)
+                   or "")
+            raw = raw.strip()
+            if not raw:
+                print(f"  {name}: empty response, skipping")
+                continue
             print(f"  Ranked by {name}")
             return _parse_rankings(raw, jobs_to_rank)
         except _SKIP_ON as e:
             print(f"  {name}: exhausted/unauthorized — {e}")
         except openai.APIStatusError as e:
-            if e.status_code in (402, 429, 503):
-                print(f"  {name}: quota/unavailable (HTTP {e.status_code})")
+            if e.status_code in (402, 413, 429, 503):
+                print(f"  {name}: quota/size/unavailable (HTTP {e.status_code})")
             else:
                 print(f"  {name}: API error (HTTP {e.status_code}) — {e.message}")
         except Exception as e:

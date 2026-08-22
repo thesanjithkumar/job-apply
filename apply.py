@@ -1,4 +1,4 @@
-import asyncio, email.policy, html as _html, json, os, random, re, smtplib, traceback, urllib.parse
+import asyncio, colorsys, email.policy, html as _html, json, os, random, re, smtplib, traceback, urllib.parse
 from datetime import datetime
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
@@ -557,84 +557,150 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
     def _clean(s: str) -> str:
         return _html.escape(str(s).replace("\xa0", " ").strip())
 
-    def _job_card(j: dict, show_apply_btn: bool) -> str:
-        score   = j.get("score", "—")
-        reason  = _clean(j.get("reason", ""))
-        title   = _clean(j.get("title", ""))
-        company = _clean(j.get("company", ""))
-        loc     = _clean(j.get("location", ""))
-        url     = j.get("url", "#")
-        rank    = j.get("rank", "—")
-        btn = (
-            f'<a href="{url}" style="display:inline-block;background:#2563eb;color:#fff;'
-            f'padding:8px 18px;border-radius:5px;text-decoration:none;font-size:13px;'
-            f'font-weight:600;margin-top:8px;">Apply Now →</a>'
-        ) if show_apply_btn else (
-            f'<span style="display:inline-block;background:#16a34a;color:#fff;'
-            f'padding:5px 14px;border-radius:5px;font-size:12px;font-weight:600;">✓ Applied</span>'
-        )
+    def _avatar(name: str) -> tuple[str, str, str]:
+        """Deterministic pastel bg / dark fg / initials for a company name."""
+        name = name or "?"
+        hue = (sum(ord(c) for c in name) % 360) / 360.0
+        r, g, b = colorsys.hls_to_rgb(hue, 0.90, 0.55)
+        bg = "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+        r, g, b = colorsys.hls_to_rgb(hue, 0.35, 0.45)
+        fg = "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+        return bg, fg, name[:2].upper()
+
+    def _score_color(score) -> tuple[str, str]:
+        try:
+            return ("#16a34a", "#f0fdf4") if float(score) >= 85 else ("#4338ca", "#eef2ff")
+        except (TypeError, ValueError):
+            return "#4338ca", "#eef2ff"
+
+    def _job_row(j: dict, show_apply_btn: bool) -> str:
+        score      = j.get("score", "—")
+        reason     = _clean(j.get("reason", ""))
+        title      = _clean(j.get("title", ""))
+        company    = _clean(j.get("company", ""))
+        loc        = _clean(j.get("location", ""))
+        url        = j.get("url", "#")
+        rank       = j.get("rank")
+        rank_label = f"{rank:02d}" if isinstance(rank, int) else "—"
+        score_color, score_bg = _score_color(score)
+        avatar_bg, avatar_fg, initials = _avatar(j.get("company", ""))
+
+        if show_apply_btn:
+            action = (
+                f'<a href="{url}" style="display:inline-block;background:#1e293b;color:#ffffff;'
+                f'padding:9px 16px;border-radius:20px;text-decoration:none;font-size:12.5px;'
+                f'font-weight:600;white-space:nowrap;">Apply &rarr;</a>'
+            )
+            meta = f'<div style="font-size:11px;font-weight:700;color:{score_color};margin-top:4px;">{score}/100</div>'
+        else:
+            action = (
+                f'<span style="display:inline-block;color:{score_color};background:{score_bg};'
+                f'padding:4px 9px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap;">{score}/100</span>'
+            )
+            meta = ""
+
         return f"""
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;
-                    padding:16px;margin-bottom:12px;box-shadow:0 1px 3px #0001;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-            <span style="background:#3b82f6;color:#fff;padding:2px 8px;border-radius:4px;
-                         font-size:12px;font-weight:700;">#{rank}</span>
-            <span style="background:#f1f5f9;color:#475569;padding:2px 8px;border-radius:4px;
-                         font-size:12px;font-weight:700;">Score: {score}/100</span>
-          </div>
-          <div style="font-size:16px;font-weight:700;color:#1e293b;margin-bottom:2px;">{title}</div>
-          <div style="font-size:13px;color:#64748b;margin-bottom:4px;">{company}
-            {"&nbsp;·&nbsp;" + loc if loc else ""}</div>
-          <div style="font-size:13px;color:#334155;font-style:italic;margin-bottom:8px;">{reason}</div>
-          {btn}
-        </div>"""
+        <tr><td style="padding:18px 40px;border-top:1px solid #eef1f5;" valign="top">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td width="22" valign="top" style="font-size:12px;font-weight:700;color:#94a3b8;padding-top:2px;">{rank_label}</td>
+          <td width="36" valign="top" style="padding:0 14px;">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td width="36" height="36" align="center" valign="middle"
+                  style="width:36px;height:36px;background:{avatar_bg};color:{avatar_fg};
+                         border-radius:10px;font-size:13px;font-weight:700;text-align:center;">{initials}</td>
+            </tr></table>
+          </td>
+          <td valign="top">
+            <div style="font-size:15px;font-weight:650;color:#1e293b;margin-bottom:2px;">{title}</div>
+            <div style="font-size:13px;color:#475569;margin-bottom:6px;">{company}{"&nbsp;&middot;&nbsp;" + loc if loc else ""}</div>
+            <div style="font-size:12.5px;color:#94a3b8;font-style:italic;">{reason}</div>
+            {meta}
+          </td>
+          <td width="90" valign="top" align="right" style="padding-top:2px;">{action}</td>
+        </tr></table>
+        </td></tr>"""
 
-    applied_html = "".join(_job_card(j, False) for j in applied) or \
-        '<p style="color:#64748b;">No applications were submitted this run.</p>'
+    applied_html = "".join(_job_row(j, False) for j in applied) or \
+        '<tr><td style="padding:18px 40px;color:#94a3b8;font-size:13px;">No applications were submitted this run.</td></tr>'
 
-    not_applied_html = "".join(_job_card(j, True) for j in not_applied) or \
-        '<p style="color:#64748b;">All jobs were applied to successfully!</p>'
+    not_applied_html = "".join(_job_row(j, True) for j in not_applied) or \
+        '<tr><td style="padding:18px 40px;color:#94a3b8;font-size:13px;">All jobs were applied to successfully!</td></tr>'
 
     html = f"""
-    <html><body style="font-family:'Segoe UI',sans-serif;background:#f8fafc;margin:0;padding:0;">
-    <div style="max-width:640px;margin:auto;">
-      <div style="background:#0f172a;color:#fff;padding:28px 24px;border-radius:8px 8px 0 0;">
-        <h1 style="margin:0;font-size:22px;">Daily Job Apply Report</h1>
-        <p style="margin:4px 0 0;opacity:.7;font-size:14px;">{date_str}</p>
-      </div>
-      <div style="background:#fff;padding:20px 24px;border-left:4px solid #3b82f6;margin:0;">
-        <div style="display:flex;gap:24px;">
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:#16a34a;">{len(applied)}</div>
-            <div style="font-size:12px;color:#64748b;text-transform:uppercase;">Applied</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:#2563eb;">{len(not_applied)}</div>
-            <div style="font-size:12px;color:#64748b;text-transform:uppercase;">Needs Manual Apply</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:32px;font-weight:800;color:#334155;">{total}</div>
-            <div style="font-size:12px;color:#64748b;text-transform:uppercase;">Total Reviewed</div>
-          </div>
-        </div>
-      </div>
+    <html><body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;">
+    <tr><td align="center" style="padding:48px 16px;">
+    <table role="presentation" width="600" cellpadding="0" cellspacing="0"
+           style="width:600px;max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
+      <tr><td height="4" style="height:4px;line-height:4px;font-size:0;background:#4f46e5;">&nbsp;</td></tr>
 
-      <div style="padding:20px 24px 8px;">
-        <h2 style="font-size:16px;color:#16a34a;margin:0 0 12px;">✓ Successfully Applied ({len(applied)})</h2>
-        {applied_html}
-      </div>
+      <tr><td style="padding:32px 40px 24px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td valign="top">
+            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:#94a3b8;text-transform:uppercase;margin-bottom:14px;">Job Apply Automation</div>
+            <div style="font-size:23px;font-weight:700;color:#1e293b;margin-bottom:4px;">Your daily report</div>
+            <div style="font-size:13.5px;color:#94a3b8;">{date_str}</div>
+          </td>
+          <td valign="top" align="right">
+            <table role="presentation" cellpadding="0" cellspacing="0" align="right" style="background:#eef2ff;border-radius:12px;"><tr>
+              <td style="padding:10px 16px;text-align:center;">
+                <div style="font-size:20px;font-weight:700;color:#4338ca;line-height:1;">{total}</div>
+                <div style="font-size:10px;font-weight:600;color:#4338ca;letter-spacing:.03em;margin-top:3px;">reviewed</div>
+              </td>
+            </tr></table>
+          </td>
+        </tr></table>
+      </td></tr>
 
-      <div style="padding:8px 24px 24px;">
-        <h2 style="font-size:16px;color:#2563eb;margin:0 0 12px;">
-          📋 Apply Manually — No Apply Button Found ({len(not_applied)})</h2>
-        {not_applied_html}
-      </div>
+      <tr><td style="padding:0 40px 28px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td width="50%">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td width="26" height="26" align="center" valign="middle"
+                  style="width:26px;height:26px;border-radius:50%;background:#f0fdf4;color:#16a34a;font-size:14px;font-weight:700;">&check;</td>
+              <td style="padding-left:10px;">
+                <div style="font-size:19px;font-weight:700;color:#1e293b;line-height:1.1;">{len(applied)}</div>
+                <div style="font-size:11.5px;color:#94a3b8;">Applied</div>
+              </td>
+            </tr></table>
+          </td>
+          <td width="50%">
+            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
+              <td width="26" height="26" align="center" valign="middle"
+                  style="width:26px;height:26px;border-radius:50%;background:#eef2ff;color:#4f46e5;font-size:14px;font-weight:700;">&#9679;</td>
+              <td style="padding-left:10px;">
+                <div style="font-size:19px;font-weight:700;color:#1e293b;line-height:1.1;">{len(not_applied)}</div>
+                <div style="font-size:11.5px;color:#94a3b8;">To review</div>
+              </td>
+            </tr></table>
+          </td>
+        </tr></table>
+      </td></tr>
 
-      <div style="text-align:center;padding:16px;color:#94a3b8;font-size:11px;
-                  border-top:1px solid #e2e8f0;">
-        Generated by Job Apply Automation
-      </div>
-    </div>
+      <tr><td style="border-top:1px solid #e2e8f0;font-size:0;line-height:0;">&nbsp;</td></tr>
+
+      <tr><td style="padding:24px 40px 4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="font-size:12.5px;font-weight:700;letter-spacing:.02em;color:#475569;text-transform:uppercase;">Applied automatically</td>
+          <td align="right"><span style="font-size:11px;font-weight:700;color:#16a34a;background:#f0fdf4;padding:2px 9px;border-radius:99px;">{len(applied)}</span></td>
+        </tr></table>
+      </td></tr>
+      <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{applied_html}</table></td></tr>
+
+      <tr><td style="padding:28px 40px 4px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+          <td style="font-size:12.5px;font-weight:700;letter-spacing:.02em;color:#475569;text-transform:uppercase;">Needs your review</td>
+          <td align="right"><span style="font-size:11px;font-weight:700;color:#4338ca;background:#eef2ff;padding:2px 9px;border-radius:99px;">{len(not_applied)}</span></td>
+        </tr></table>
+      </td></tr>
+      <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{not_applied_html}</table></td></tr>
+
+      <tr><td style="padding:22px 40px 30px;border-top:1px solid #e2e8f0;text-align:center;">
+        <p style="margin:0;font-size:11.5px;color:#94a3b8;">Generated automatically by your job search agent.</p>
+      </td></tr>
+    </table>
+    </td></tr>
+    </table>
     </body></html>"""
 
     msg = MIMEMultipart("alternative")
@@ -748,13 +814,13 @@ async def _run():
 
         eligible = [
             j for j in jobs[:100]
-            if j.get("score", 0) >= 75 and j.get("url") not in already_seen
+            if j.get("score", 0) >= 70 and j.get("url") not in already_seen
         ]
         skipped = len([j for j in jobs[:100] if j.get("url") in already_seen])
-        print(f"\n  {len(eligible)} jobs with score ≥ 75 (out of {len(jobs[:100])} ranked, {skipped} already seen skipped)")
+        print(f"\n  {len(eligible)} jobs with score ≥ 70 (out of {len(jobs[:100])} ranked, {skipped} already seen skipped)")
 
         for job in eligible:
-            print(f"\n→ #{job['rank']} [{job['score']}/100]  {job['title']} @ {job['company']}")
+            print(f"\n→ #{job.get('rank', '—')} [{job['score']}/100]  {job['title']} @ {job['company']}")
 
             # LinkedIn requires login — skip if no cookie was injected
             if "linkedin.com" in job.get("url", "") and not li_at:

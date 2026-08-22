@@ -552,26 +552,59 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
         return
 
     date_str = datetime.now().strftime("%B %d, %Y")
-    total    = len(applied) + len(not_applied)
+
+    _MONO = "'Fira Code','Courier New',Courier,monospace"
+    _SANS = "Manrope,Arial,Helvetica,sans-serif"
+    _SERIF = "Spectral,Georgia,'Times New Roman',serif"
+    _INK, _SUB, _FAINT, _LINE = "#15161a", "#52565e", "#9ba0aa", "#e5e7eb"
+    _ACCENT, _CANVAS = "#4b3df5", "#eef0f3"
+    _GOOD = "#0f7a56"
 
     def _clean(s: str) -> str:
         return _html.escape(str(s).replace("\xa0", " ").strip())
 
     def _avatar(name: str) -> tuple[str, str, str]:
-        """Deterministic pastel bg / dark fg / initials for a company name."""
+        """Deterministic bg / fg / initials for a company name."""
         name = name or "?"
         hue = (sum(ord(c) for c in name) % 360) / 360.0
-        r, g, b = colorsys.hls_to_rgb(hue, 0.90, 0.55)
+        r, g, b = colorsys.hls_to_rgb(hue, 0.88, 0.42)
         bg = "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
-        r, g, b = colorsys.hls_to_rgb(hue, 0.35, 0.45)
+        r, g, b = colorsys.hls_to_rgb(hue, 0.28, 0.48)
         fg = "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
         return bg, fg, name[:2].upper()
 
-    def _score_color(score) -> tuple[str, str]:
+    def _score_tier(score) -> str:
         try:
-            return ("#16a34a", "#f0fdf4") if float(score) >= 85 else ("#4338ca", "#eef2ff")
+            return _GOOD if float(score) >= 85 else _ACCENT
         except (TypeError, ValueError):
-            return "#4338ca", "#eef2ff"
+            return _ACCENT
+
+    def _headline(applied_n: int, pending_n: int) -> str:
+        if applied_n and pending_n:
+            return f"{applied_n} applied, {pending_n} to review"
+        if applied_n:
+            return f"{applied_n} applied &mdash; you're all caught up"
+        if pending_n:
+            return f"{pending_n} job{'s' if pending_n != 1 else ''} to review"
+        return "No qualifying matches today"
+
+    def _ledger_bar(applied_n: int, pending_n: int) -> str:
+        total = applied_n + pending_n
+        if total == 0:
+            return f'<div style="height:8px;background:{_CANVAS};border-radius:2px;"></div>'
+        applied_w = round(520 * applied_n / total)
+        pending_w = 520 - applied_w
+        segs = ""
+        if applied_w:
+            segs += f'<td width="{applied_w}" height="8" style="background:{_INK};font-size:0;line-height:8px;">&nbsp;</td>'
+        if pending_w:
+            segs += f'<td width="{pending_w}" height="8" style="background:{_ACCENT};font-size:0;line-height:8px;">&nbsp;</td>'
+        return f"""
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0"><tr>{segs}</tr></table>
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0" style="margin-top:10px;"><tr>
+          <td style="font-family:{_MONO};font-size:10px;letter-spacing:1px;color:{_INK};font-weight:700;">APPLIED</td>
+          <td align="right" style="font-family:{_MONO};font-size:10px;letter-spacing:1px;color:{_ACCENT};font-weight:700;">TO REVIEW</td>
+        </tr></table>"""
 
     def _job_row(j: dict, show_apply_btn: bool) -> str:
         score      = j.get("score", "—")
@@ -581,122 +614,102 @@ def send_report_email(applied: list[dict], not_applied: list[dict]):
         loc        = _clean(j.get("location", ""))
         url        = j.get("url", "#")
         rank       = j.get("rank")
-        rank_label = f"{rank:02d}" if isinstance(rank, int) else "—"
-        score_color, score_bg = _score_color(score)
+        rank_label = f"{rank:02d}" if isinstance(rank, int) else "--"
+        tier       = _score_tier(score)
         avatar_bg, avatar_fg, initials = _avatar(j.get("company", ""))
 
+        try:
+            score_label = f"{int(float(score)):03d}"
+        except (TypeError, ValueError):
+            score_label = "---"
+
+        stamp = (
+            f'<span style="display:inline-block;font-family:{_MONO};font-size:12px;font-weight:700;'
+            f'color:{tier};border:1px solid {tier};padding:3px 7px;border-radius:4px;white-space:nowrap;">{score_label}</span>'
+        )
+
         if show_apply_btn:
-            action = (
-                f'<a href="{url}" style="display:inline-block;background:#1e293b;color:#ffffff;'
-                f'padding:9px 16px;border-radius:20px;text-decoration:none;font-size:12.5px;'
-                f'font-weight:600;white-space:nowrap;">Apply &rarr;</a>'
+            right_cell = (
+                f'<a href="{url}" style="display:inline-block;background:{_ACCENT};color:#ffffff;'
+                f'font-family:{_SANS};padding:9px 16px;border-radius:20px;text-decoration:none;'
+                f'font-size:12.5px;font-weight:700;white-space:nowrap;">Apply &rarr;</a>'
             )
-            meta = f'<div style="font-size:11px;font-weight:700;color:{score_color};margin-top:4px;">{score}/100</div>'
+            meta = f'<div style="margin-top:6px;">{stamp}</div>'
         else:
-            action = (
-                f'<span style="display:inline-block;color:{score_color};background:{score_bg};'
-                f'padding:4px 9px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap;">{score}/100</span>'
-            )
+            right_cell = stamp
             meta = ""
 
         return f"""
-        <tr><td style="padding:18px 40px;border-top:1px solid #eef1f5;" valign="top">
+        <tr><td style="padding:18px 40px;border-top:1px solid {_LINE};" valign="top">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td width="22" valign="top" style="font-size:12px;font-weight:700;color:#94a3b8;padding-top:2px;">{rank_label}</td>
-          <td width="36" valign="top" style="padding:0 14px;">
+          <td width="26" valign="top" style="font-family:{_MONO};font-size:11px;font-weight:700;color:{_FAINT};padding-top:3px;">{rank_label}</td>
+          <td width="34" valign="top" style="padding:0 12px;">
             <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-              <td width="36" height="36" align="center" valign="middle"
-                  style="width:36px;height:36px;background:{avatar_bg};color:{avatar_fg};
-                         border-radius:10px;font-size:13px;font-weight:700;text-align:center;">{initials}</td>
+              <td width="34" height="34" align="center" valign="middle"
+                  style="width:34px;height:34px;background:{avatar_bg};color:{avatar_fg};
+                         border-radius:6px;font-family:{_SANS};font-size:12px;font-weight:700;text-align:center;">{initials}</td>
             </tr></table>
           </td>
-          <td valign="top">
-            <div style="font-size:15px;font-weight:650;color:#1e293b;margin-bottom:2px;">{title}</div>
-            <div style="font-size:13px;color:#475569;margin-bottom:6px;">{company}{"&nbsp;&middot;&nbsp;" + loc if loc else ""}</div>
-            <div style="font-size:12.5px;color:#94a3b8;font-style:italic;">{reason}</div>
+          <td valign="top" style="font-family:{_SANS};">
+            <div style="font-size:15px;font-weight:700;color:{_INK};margin-bottom:2px;">{title}</div>
+            <div style="font-size:13px;color:{_SUB};margin-bottom:6px;">{company}{"&nbsp;&middot;&nbsp;" + loc if loc else ""}</div>
+            <div style="font-size:12.5px;color:{_FAINT};font-style:italic;">{reason}</div>
             {meta}
           </td>
-          <td width="90" valign="top" align="right" style="padding-top:2px;">{action}</td>
+          <td width="92" valign="top" align="right" style="padding-top:2px;">{right_cell}</td>
         </tr></table>
         </td></tr>"""
 
     applied_html = "".join(_job_row(j, False) for j in applied) or \
-        '<tr><td style="padding:18px 40px;color:#94a3b8;font-size:13px;">No applications were submitted this run.</td></tr>'
+        f'<tr><td style="padding:18px 40px;font-family:{_SANS};color:{_FAINT};font-size:13px;">Nothing applied automatically this run.</td></tr>'
 
     not_applied_html = "".join(_job_row(j, True) for j in not_applied) or \
-        '<tr><td style="padding:18px 40px;color:#94a3b8;font-size:13px;">All jobs were applied to successfully!</td></tr>'
+        f'<tr><td style="padding:18px 40px;font-family:{_SANS};color:{_FAINT};font-size:13px;">Nothing left for you — everything auto-applied.</td></tr>'
 
     html = f"""
-    <html><body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;">
+    <html><head><meta charset="utf-8">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,600;0,700;1,400&family=Manrope:wght@400;600;800&family=Fira+Code:wght@500;700&display=swap">
+    </head><body style="margin:0;padding:0;background:{_CANVAS};font-family:{_SANS};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_CANVAS};">
     <tr><td align="center" style="padding:48px 16px;">
     <table role="presentation" width="600" cellpadding="0" cellspacing="0"
-           style="width:600px;max-width:600px;background:#ffffff;border:1px solid #e2e8f0;border-radius:16px;overflow:hidden;">
-      <tr><td height="4" style="height:4px;line-height:4px;font-size:0;background:#4f46e5;">&nbsp;</td></tr>
+           style="width:600px;max-width:600px;background:#ffffff;border:1px solid {_LINE};border-radius:16px;overflow:hidden;">
+      <tr><td height="3" style="height:3px;line-height:3px;font-size:0;background:{_INK};">&nbsp;</td></tr>
 
-      <tr><td style="padding:32px 40px 24px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td valign="top">
-            <div style="font-size:11px;font-weight:700;letter-spacing:.08em;color:#94a3b8;text-transform:uppercase;margin-bottom:14px;">Job Apply Automation</div>
-            <div style="font-size:23px;font-weight:700;color:#1e293b;margin-bottom:4px;">Your daily report</div>
-            <div style="font-size:13.5px;color:#94a3b8;">{date_str}</div>
-          </td>
-          <td valign="top" align="right">
-            <table role="presentation" cellpadding="0" cellspacing="0" align="right" style="background:#eef2ff;border-radius:12px;"><tr>
-              <td style="padding:10px 16px;text-align:center;">
-                <div style="font-size:20px;font-weight:700;color:#4338ca;line-height:1;">{total}</div>
-                <div style="font-size:10px;font-weight:600;color:#4338ca;letter-spacing:.03em;margin-top:3px;">reviewed</div>
-              </td>
-            </tr></table>
-          </td>
+      <tr><td style="padding:34px 40px 4px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin-bottom:16px;"><tr>
+          <td width="6" height="6" style="background:{_ACCENT};font-size:0;line-height:0;">&nbsp;</td>
+          <td style="padding-left:8px;font-family:{_MONO};font-size:11px;font-weight:700;letter-spacing:2px;color:{_ACCENT};text-transform:uppercase;">Overnight Dispatch</td>
         </tr></table>
+        <div style="font-family:{_SERIF};font-size:27px;font-weight:700;color:{_INK};letter-spacing:-.2px;margin-bottom:6px;">{_headline(len(applied), len(not_applied))}</div>
+        <div style="font-family:{_SANS};font-size:13px;color:{_FAINT};">{date_str}</div>
       </td></tr>
 
-      <tr><td style="padding:0 40px 28px;">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td width="50%">
-            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-              <td width="26" height="26" align="center" valign="middle"
-                  style="width:26px;height:26px;border-radius:50%;background:#f0fdf4;color:#16a34a;font-size:14px;font-weight:700;">&check;</td>
-              <td style="padding-left:10px;">
-                <div style="font-size:19px;font-weight:700;color:#1e293b;line-height:1.1;">{len(applied)}</div>
-                <div style="font-size:11.5px;color:#94a3b8;">Applied</div>
-              </td>
-            </tr></table>
-          </td>
-          <td width="50%">
-            <table role="presentation" cellpadding="0" cellspacing="0"><tr>
-              <td width="26" height="26" align="center" valign="middle"
-                  style="width:26px;height:26px;border-radius:50%;background:#eef2ff;color:#4f46e5;font-size:14px;font-weight:700;">&#9679;</td>
-              <td style="padding-left:10px;">
-                <div style="font-size:19px;font-weight:700;color:#1e293b;line-height:1.1;">{len(not_applied)}</div>
-                <div style="font-size:11.5px;color:#94a3b8;">To review</div>
-              </td>
-            </tr></table>
-          </td>
-        </tr></table>
+      <tr><td style="padding:22px 40px 4px;">
+        {_ledger_bar(len(applied), len(not_applied))}
       </td></tr>
 
-      <tr><td style="border-top:1px solid #e2e8f0;font-size:0;line-height:0;">&nbsp;</td></tr>
+      <tr><td style="padding-top:22px;border-top:1px solid {_LINE};font-size:0;line-height:0;">&nbsp;</td></tr>
 
-      <tr><td style="padding:24px 40px 4px;">
+      <tr><td style="padding:24px 40px 6px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td style="font-size:12.5px;font-weight:700;letter-spacing:.02em;color:#475569;text-transform:uppercase;">Applied automatically</td>
-          <td align="right"><span style="font-size:11px;font-weight:700;color:#16a34a;background:#f0fdf4;padding:2px 9px;border-radius:99px;">{len(applied)}</span></td>
+          <td style="font-family:{_MONO};font-size:12px;font-weight:700;letter-spacing:1px;color:{_SUB};text-transform:uppercase;">Applied Automatically</td>
+          <td align="right"><span style="font-family:{_MONO};font-size:11px;font-weight:700;color:{_INK};background:{_CANVAS};padding:3px 8px;border-radius:4px;">{len(applied):02d}</span></td>
         </tr></table>
       </td></tr>
       <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{applied_html}</table></td></tr>
 
-      <tr><td style="padding:28px 40px 4px;">
+      <tr><td style="padding:28px 40px 6px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-          <td style="font-size:12.5px;font-weight:700;letter-spacing:.02em;color:#475569;text-transform:uppercase;">Needs your review</td>
-          <td align="right"><span style="font-size:11px;font-weight:700;color:#4338ca;background:#eef2ff;padding:2px 9px;border-radius:99px;">{len(not_applied)}</span></td>
+          <td style="font-family:{_MONO};font-size:12px;font-weight:700;letter-spacing:1px;color:{_SUB};text-transform:uppercase;">Needs Your Review</td>
+          <td align="right"><span style="font-family:{_MONO};font-size:11px;font-weight:700;color:{_ACCENT};background:{_CANVAS};padding:3px 8px;border-radius:4px;">{len(not_applied):02d}</span></td>
         </tr></table>
       </td></tr>
       <tr><td><table role="presentation" width="100%" cellpadding="0" cellspacing="0">{not_applied_html}</table></td></tr>
 
-      <tr><td style="padding:22px 40px 30px;border-top:1px solid #e2e8f0;text-align:center;">
-        <p style="margin:0;font-size:11.5px;color:#94a3b8;">Generated automatically by your job search agent.</p>
+      <tr><td style="padding:26px 40px 30px;border-top:1px solid {_LINE};text-align:center;">
+        <div style="font-family:{_MONO};font-size:10px;letter-spacing:1.5px;color:{_FAINT};text-transform:uppercase;">&mdash; End of Dispatch &mdash;</div>
+        <div style="font-family:{_SANS};font-size:11px;color:{_FAINT};margin-top:8px;">Generated automatically by your job search agent.</div>
       </td></tr>
     </table>
     </td></tr>

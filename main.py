@@ -590,8 +590,11 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             ) as stream:
                 for chunk in stream.text_stream:
                     full_text += chunk
-            print("  Ranked by Anthropic")
-            return _parse_rankings(full_text, jobs_to_rank)
+            parsed = _parse_rankings(full_text, jobs_to_rank)
+            if parsed:
+                print("  Ranked by Anthropic")
+                return parsed
+            print(f"  Anthropic: 0 parsed rankings (raw len={len(full_text)}), trying next provider")
         except Exception as e:
             print(f"  Anthropic failed: {e}")
 
@@ -608,7 +611,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             resp = client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=4096,
+                max_tokens=8192,
                 temperature=0.1,
                 timeout=120,
             )
@@ -625,8 +628,11 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             if not raw:
                 print(f"  {name}: empty response, skipping")
                 continue
-            print(f"  Ranked by {name}")
-            return _parse_rankings(raw, jobs_to_rank)
+            parsed = _parse_rankings(raw, jobs_to_rank)
+            if parsed:
+                print(f"  Ranked by {name}")
+                return parsed
+            print(f"  {name}: 0 parsed rankings (raw len={len(raw)}), trying next provider")
         except _SKIP_ON as e:
             print(f"  {name}: exhausted/unauthorized — {e}")
         except openai.APIStatusError as e:

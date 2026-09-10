@@ -1,4 +1,4 @@
-import os, json, re
+import os, json, re, urllib.parse
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -489,6 +489,60 @@ def _scrape_remotive(seen: set, jobs: list):
             print(f"  Warning: Remotive '{term}' failed: {e}")
 
 
+def _scrape_jpmc(seen: set, jobs: list):
+    """JP Morgan Chase Oracle Cloud HCM career site — India tech roles."""
+    print("  [JPMC] Scraping Oracle Cloud career page...")
+    base = "https://jpmc.fa.oraclecloud.com"
+    api_base = f"{base}/hcmRestApi/resources/11.13.18.05/recruitingCEJobRequisitions"
+    found = 0
+    for term in SEARCH_TERMS:
+        offset, limit, total = 0, 100, None
+        while True:
+            kw = urllib.parse.quote(term)
+            url = (
+                f"{api_base}?onlyData=true&expand=requisitionList"
+                f"&finder=findReqs;siteNumber=CX_1001,limit={limit},offset={offset},keyword={kw}"
+            )
+            try:
+                res = requests.get(url, headers=_HEADERS, timeout=20)
+                if res.status_code != 200:
+                    break
+                items = res.json().get("items", [])
+                if not items:
+                    break
+                search_obj = items[0]
+                if total is None:
+                    total = search_obj.get("TotalJobsCount", 0)
+                for j in search_obj.get("requisitionList", []):
+                    title = j.get("Title", "")
+                    location = j.get("PrimaryLocation", "")
+                    if not _role_match(title) or not _india_loc(location):
+                        continue
+                    job_id = j.get("Id", "")
+                    job_url = f"{base}/hcmUI/CandidateExperience/en/sites/CX_1001/job/{job_id}"
+                    if not job_id or job_url in seen:
+                        continue
+                    seen.add(job_url)
+                    jobs.append({
+                        "title": title,
+                        "company": "JPMorgan Chase",
+                        "location": location,
+                        "url": job_url,
+                        "description": str(j.get("ShortDescriptionStr", "") or "")[:600],
+                        "source": "JPMC",
+                        "date_posted": j.get("PostedDate", ""),
+                    })
+                    found += 1
+                offset += limit
+                if total is not None and offset >= total:
+                    break
+            except Exception as e:
+                print(f"  Warning: JPMC '{term}' offset={offset} failed: {e}")
+                break
+    if found:
+        print(f"    JPMC: {found} matched")
+
+
 def scrape_all() -> list[dict]:
     seen, jobs = set(), []
 
@@ -496,6 +550,7 @@ def scrape_all() -> list[dict]:
     _scrape_greenhouse(seen, jobs)
     _scrape_lever(seen, jobs)
     _scrape_workday(seen, jobs)
+    _scrape_jpmc(seen, jobs)
     _scrape_remoteok(seen, jobs)
     _scrape_arbeitnow(seen, jobs)
     _scrape_jobviareferral(seen, jobs)
@@ -553,33 +608,26 @@ def _parse_rankings(raw: str, jobs: list[dict]) -> list[dict]:
     ]
 
 
-_PRIMARY_TERMS = ["ai engineer", "ai full stack", "full stack", "fullstack", "machine learning", "ml engineer"]
+_PRIMARY_TERMS = ["ai engineer", "ai full stack", "full stack", "fullstack", "machine learning", "ml engineer", "software engineer"]
 _MAX_JOBS_TO_RANK = 60   # keeps prompt under ~6k tokens for free-tier providers
 
 
-def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
-    # Sort: primary-term matches first, then others; cap at MAX to stay within token limits
-    def _priority(j):
-        t = j.get("title", "").lower()
-        return 0 if any(p in t for p in _PRIMARY_TERMS) else 1
-
-    jobs_to_rank = sorted(jobs, key=_priority)[:_MAX_JOBS_TO_RANK]
-
+def _rank_batch(resume: str, batch: list[dict]) -> list[dict]:
+    """Send one batch of jobs to the LLM and return scored+ranked results."""
     jobs_blob = "\n\n".join(
         f"[{i+1}] {j['title']} @ {j['company']} ({j['location']})\n{j['description'][:200]}"
-        for i, j in enumerate(jobs_to_rank)
+        for i, j in enumerate(batch)
     )
     prompt = (
         "You are a career advisor. Rank ALL jobs best to worst match for this candidate.\n\n"
         f"RESUME:\n{resume}\n\n"
-        f"JOB LISTINGS ({len(jobs_to_rank)} total):\n{jobs_blob}\n\n"
+        f"JOB LISTINGS ({len(batch)} total):\n{jobs_blob}\n\n"
         "Return ONLY a JSON array with ALL jobs ranked best to worst:\n"
         '[{"rank":1,"index":<1-based job index>,"score":<0-100>,"reason":"<max 8 words>"},...]\n'
         "No other text. Include every job. Reason must be under 8 words."
     )
 
     if os.environ.get("ANTHROPIC_API_KEY"):
-        print("  Trying Anthropic (claude-opus-5)...")
         try:
             client = anthropic.Anthropic()
             full_text = ""
@@ -590,13 +638,13 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
             ) as stream:
                 for chunk in stream.text_stream:
                     full_text += chunk
-            parsed = _parse_rankings(full_text, jobs_to_rank)
+            parsed = _parse_rankings(full_text, batch)
             if parsed:
-                print("  Ranked by Anthropic")
+                print("    Ranked by Anthropic")
                 return parsed
-            print(f"  Anthropic: 0 parsed rankings (raw len={len(full_text)}), trying next provider")
+            print(f"    Anthropic: 0 parsed rankings, trying next provider")
         except Exception as e:
-            print(f"  Anthropic failed: {e}")
+            print(f"    Anthropic failed: {e}")
 
     available = [(n, u, e, m) for n, u, e, m in PROVIDERS if os.environ.get(e)]
     if not available:
@@ -605,7 +653,7 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
         )
 
     for name, base_url, env_var, model in available:
-        print(f"  Trying {name} ({model})...")
+        print(f"    Trying {name} ({model})...")
         try:
             client = openai.OpenAI(base_url=base_url, api_key=os.environ[env_var])
             resp = client.chat.completions.create(
@@ -616,34 +664,69 @@ def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
                 timeout=120,
             )
             if not resp.choices:
-                print(f"  {name}: empty choices in response, skipping")
                 continue
             msg = resp.choices[0].message
-            # Some reasoning models (e.g. deepseek-r1) put the answer in
-            # reasoning_content when content is None.
             raw = (getattr(msg, "content", None)
                    or getattr(msg, "reasoning_content", None)
                    or "")
             raw = raw.strip()
             if not raw:
-                print(f"  {name}: empty response, skipping")
                 continue
-            parsed = _parse_rankings(raw, jobs_to_rank)
+            parsed = _parse_rankings(raw, batch)
             if parsed:
-                print(f"  Ranked by {name}")
+                print(f"    Ranked by {name}")
                 return parsed
-            print(f"  {name}: 0 parsed rankings (raw len={len(raw)}), trying next provider")
         except _SKIP_ON as e:
-            print(f"  {name}: exhausted/unauthorized — {e}")
+            print(f"    {name}: exhausted/unauthorized — {e}")
         except openai.APIStatusError as e:
             if e.status_code in (402, 413, 429, 503):
-                print(f"  {name}: quota/size/unavailable (HTTP {e.status_code})")
+                print(f"    {name}: quota/size/unavailable (HTTP {e.status_code})")
             else:
-                print(f"  {name}: API error (HTTP {e.status_code}) — {e.message}")
+                print(f"    {name}: API error (HTTP {e.status_code}) — {e.message}")
         except Exception as e:
-            print(f"  {name}: failed — {e}")
+            print(f"    {name}: failed — {e}")
 
     raise RuntimeError("All configured providers failed or exhausted. Add more keys or try again later.")
+
+
+def rank_jobs(resume: str, jobs: list[dict]) -> list[dict]:
+    """Rank all jobs in batches of _MAX_JOBS_TO_RANK, then merge by score."""
+    def _priority(j):
+        t = j.get("title", "").lower()
+        return 0 if any(p in t for p in _PRIMARY_TERMS) else 1
+
+    sorted_jobs = sorted(jobs, key=_priority)
+    batches = [sorted_jobs[i:i + _MAX_JOBS_TO_RANK] for i in range(0, len(sorted_jobs), _MAX_JOBS_TO_RANK)]
+    total_batches = len(batches)
+    print(f"  {len(jobs)} jobs → {total_batches} batch(es) of up to {_MAX_JOBS_TO_RANK}")
+
+    all_scored = []
+    for i, batch in enumerate(batches):
+        print(f"  Batch {i+1}/{total_batches} ({len(batch)} jobs)...")
+        ranked_batch = _rank_batch(resume, batch)
+        all_scored.extend(ranked_batch)
+
+    # If only one batch, no merge pass needed
+    if total_batches == 1:
+        for rank, j in enumerate(all_scored, start=1):
+            j["rank"] = rank
+        return all_scored
+
+    # Final merge pass: take top _MAX_JOBS_TO_RANK candidates by batch score and re-rank globally
+    all_scored.sort(key=lambda j: j["score"], reverse=True)
+    top_candidates = all_scored[:_MAX_JOBS_TO_RANK]
+    remainder = all_scored[_MAX_JOBS_TO_RANK:]
+
+    print(f"  Final merge pass: re-ranking top {len(top_candidates)} candidates across all batches...")
+    final_ranked = _rank_batch(resume, top_candidates)
+
+    # Append remainder (already scored, just renumbered after top candidates)
+    remainder.sort(key=lambda j: j["score"], reverse=True)
+    combined = final_ranked + remainder
+    for rank, j in enumerate(combined, start=1):
+        j["rank"] = rank
+
+    return combined
 
 
 if __name__ == "__main__":

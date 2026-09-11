@@ -1,5 +1,8 @@
-import asyncio, colorsys, email.policy, html as _html, json, os, random, re, smtplib, traceback, urllib.parse
+import asyncio, colorsys, email.policy, html as _html, json, os, random, re, smtplib, time, traceback, urllib.parse
 from datetime import datetime
+
+MAX_APPLY_JOBS  = 15    # max jobs to attempt applying to per run
+APPLY_BUDGET_S  = 25 * 60  # 25 minutes total budget for the apply loop
 from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -152,7 +155,6 @@ async def find_recruiter(browser: Browser, job: dict, domain: str) -> tuple[str,
     Best-effort recruiter email hunt. Priority:
     1. Recruiter name scraped from the job page  → Mailmeteor name finder
     2. Recruiter LinkedIn URL scraped from page  → Mailmeteor LinkedIn finder
-    3. Generic HR titles as fallback             → Mailmeteor name finder
     Returns (email, name).
     """
     # Path 1 — name extracted during apply_to_job
@@ -160,21 +162,13 @@ async def find_recruiter(browser: Browser, job: dict, domain: str) -> tuple[str,
         email, name = await mm_by_name(browser, job["recruiter_name"], domain)
         if email:
             return email, name
-        await asyncio.sleep(random.uniform(4, 7))
+        await asyncio.sleep(random.uniform(2, 4))
 
     # Path 2 — LinkedIn URL extracted during apply_to_job
     if job.get("recruiter_linkedin"):
         email, name = await mm_by_linkedin(browser, job["recruiter_linkedin"])
         if email:
             return email, name
-        await asyncio.sleep(random.uniform(4, 7))
-
-    # Path 3 — generic HR role titles as person name (low hit rate, last resort)
-    for title in ("HR Manager", "Talent Acquisition", "Recruiting Manager"):
-        email, name = await mm_by_name(browser, title, domain)
-        if email:
-            return email, name
-        await asyncio.sleep(random.uniform(5, 8))
 
     return "", ""
 
@@ -828,11 +822,17 @@ async def _run():
         eligible = [
             j for j in jobs[:100]
             if j.get("score", 0) >= 70 and j.get("url") not in already_seen
-        ]
+        ][:MAX_APPLY_JOBS]
         skipped = len([j for j in jobs[:100] if j.get("url") in already_seen])
-        print(f"\n  {len(eligible)} jobs with score ≥ 70 (out of {len(jobs[:100])} ranked, {skipped} already seen skipped)")
+        print(f"\n  {len(eligible)} jobs with score ≥ 70 (capped at {MAX_APPLY_JOBS}, {skipped} already seen skipped)")
 
+        deadline = time.monotonic() + APPLY_BUDGET_S
         for job in eligible:
+            if time.monotonic() > deadline:
+                print(f"\n  Time budget ({APPLY_BUDGET_S // 60} min) reached — stopping apply loop")
+                not_applied_jobs.extend(j for j in eligible if j not in applied_jobs and j not in not_applied_jobs)
+                break
+
             print(f"\n→ #{job.get('rank', '—')} [{job['score']}/100]  {job['title']} @ {job['company']}")
 
             # LinkedIn requires login — skip if no cookie was injected
@@ -863,7 +863,7 @@ async def _run():
             else:
                 not_applied_jobs.append(job)
 
-            await asyncio.sleep(random.uniform(5, 10))
+            await asyncio.sleep(random.uniform(2, 4))
 
         await mm_browser.close()
         await job_ctx.close()

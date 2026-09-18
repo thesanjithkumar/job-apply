@@ -620,6 +620,16 @@ def _rank_batch(resume: str, batch: list[dict]) -> list[dict]:
     )
     prompt = (
         "You are a career advisor. Rank ALL jobs best to worst match for this candidate.\n\n"
+        "Score each job 0-100 using these weighted criteria:\n"
+        "- Skill & tech stack match (40%)\n"
+        "- Experience level match (35%): infer the candidate's total years of experience "
+        "from the resume; compare ONLY against explicit experience requirements stated in "
+        "the job description (e.g. '3-5 years required', '8+ years', 'entry level') — "
+        "do NOT use the job title (Senior/Junior/etc.) to infer seniority; allow up to "
+        "1 year above the candidate's experience without penalty; only penalise if the "
+        "gap is more than 1 year above OR if the role is significantly below their level; "
+        "if no explicit requirement is stated, do not penalise\n"
+        "- Role title & domain alignment (25%)\n\n"
         f"RESUME:\n{resume}\n\n"
         f"JOB LISTINGS ({len(batch)} total):\n{jobs_blob}\n\n"
         "Return ONLY a JSON array with ALL jobs ranked best to worst:\n"
